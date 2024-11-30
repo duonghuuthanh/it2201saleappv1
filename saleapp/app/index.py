@@ -1,15 +1,13 @@
 import math
-
-from flask import render_template, request, redirect
-import dao
+from flask import render_template, request, redirect, session, jsonify
+import dao, utils
 from app import app, login
 from flask_login import login_user, logout_user
+from app.models import UserRole
 
 
 @app.route("/")
 def index():
-    cates = dao.load_categories()
-
     cate_id = request.args.get('category_id')
     kw = request.args.get('kw')
     page = request.args.get('page', 1)
@@ -18,7 +16,8 @@ def index():
 
     total = dao.count_products()
     page_size = app.config['PAGE_SIZE']
-    return render_template('index.html', categories=cates, products=prods, pages=math.ceil(total/page_size))
+
+    return render_template('index.html', products=prods, pages=math.ceil(total/page_size))
 
 
 @app.route("/login", methods=['get', 'post'])
@@ -34,10 +33,90 @@ def login_process():
     return render_template('login.html')
 
 
+@app.route('/register', methods=['get', 'post'])
+def register_process():
+    err_msg = None
+    if request.method.__eq__('POST'):
+        password = request.form.get('password')
+        confirm = request.form.get('confirm')
+        print(request.form)
+        if password.__eq__(confirm):
+            data = request.form.copy()
+            del data['confirm']
+
+            avatar = request.files.get('avatar')
+
+            dao.add_user(avatar=avatar, **data)
+
+            return redirect('/login')
+        else:
+            err_msg = 'Mật khẩu KHÔNG khớp!'
+
+    return render_template('register.html', err_msg=err_msg)
+
+
+@app.route("/login-admin", methods=['post'])
+def login_admin_process():
+    username = request.form.get('username')
+    password = request.form.get('password')
+    u = dao.auth_user(username=username, password=password, role=UserRole.ADMIN)
+    if u:
+        login_user(u)
+
+    return redirect('/admin')
+
+
 @app.route("/logout", methods=['get', 'post'])
 def logout_process():
     logout_user()
     return redirect("/login")
+
+
+@app.route('/api/carts', methods=['post'])
+def add_to_cart():
+    """
+    {
+        "1": {
+            "id": "1",
+            "name": "abc",
+            "price": 123,
+            "quantity": 1
+        }, "2": {
+            "id": "2",
+            "name": "abc",
+            "price": 123,
+            "quantity": 1
+        }
+    }
+    """
+    cart = session.get('cart')
+    if not cart:
+        cart = {}
+
+    id = str(request.json.get("id"))
+    name = request.json.get("name")
+    price = request.json.get("price")
+
+    if id in cart:
+        cart[id]["quantity"] += 1
+    else:
+        cart[id] = {
+            "id": id,
+            "name": name,
+            "price": price,
+            "quantity": 1
+        }
+
+    session['cart'] = cart
+
+    print(cart)
+
+    return jsonify(utils.stats_cart(cart))
+
+
+@app.route('/cart')
+def cart():
+    return render_template('cart.html')
 
 
 @login.user_loader
@@ -45,5 +124,14 @@ def load_user(user_id):
     return dao.get_user_by_id(user_id)
 
 
+@app.context_processor
+def common_response():
+    return {
+        'categories': dao.load_categories(),
+        'cart_stats': utils.stats_cart(session.get('cart'))
+    }
+
+
 if __name__ == '__main__':
+    from app import admin
     app.run(debug=True, port=9999)
